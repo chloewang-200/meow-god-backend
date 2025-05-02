@@ -5,3 +5,4 @@ google-auth==2.27.0
 flask-cors==4.0.0
 gunicorn==21.2.0
 python-dotenv
+sqlalchemy==2.0.30
