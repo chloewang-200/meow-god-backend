@@ -30,21 +30,34 @@ CORS(app, resources={
 # Initialize Firebase Admin
 def initialize_firebase():
     try:
+        print("Starting Firebase initialization...")
+        print("Environment variables available:")
+        for key in ['FIREBASE_PRIVATE_KEY_ID', 'FIREBASE_CLIENT_EMAIL', 'FIREBASE_CLIENT_ID', 'FIREBASE_CLIENT_CERT_URL']:
+            value = os.getenv(key)
+            print(f"{key}: {'Set' if value else 'Not set'}")
+        print("FIREBASE_PRIVATE_KEY: " + ('Set' if os.getenv('FIREBASE_PRIVATE_KEY') else 'Not set'))
+        
         # For local development
         if os.path.exists("serviceAccountKey.json"):
+            print("Using local serviceAccountKey.json")
             cred = credentials.Certificate("serviceAccountKey.json")
         # For Cloud Run
         else:
+            print("Using environment variables for Firebase credentials")
             # Get credentials from environment variables
             private_key = os.getenv('FIREBASE_PRIVATE_KEY')
-            if private_key:
-                # Handle the private key format
-                private_key = private_key.replace('\\n', '\n')
-                if not private_key.startswith('-----BEGIN PRIVATE KEY-----'):
-                    private_key = '-----BEGIN PRIVATE KEY-----\n' + private_key
-                if not private_key.endswith('-----END PRIVATE KEY-----'):
-                    private_key = private_key + '\n-----END PRIVATE KEY-----'
+            if not private_key:
+                raise ValueError("FIREBASE_PRIVATE_KEY environment variable is not set")
             
+            print("Private key found, formatting...")
+            # Handle the private key format
+            private_key = private_key.replace('\\n', '\n')
+            if not private_key.startswith('-----BEGIN PRIVATE KEY-----'):
+                private_key = '-----BEGIN PRIVATE KEY-----\n' + private_key
+            if not private_key.endswith('-----END PRIVATE KEY-----'):
+                private_key = private_key + '\n-----END PRIVATE KEY-----'
+            
+            print("Creating credentials object...")
             cred = credentials.Certificate({
                 "type": "service_account",
                 "project_id": "meow-god",
@@ -58,22 +71,24 @@ def initialize_firebase():
                 "client_x509_cert_url": os.getenv('FIREBASE_CLIENT_CERT_URL')
             })
         
+        print("Initializing Firebase Admin SDK...")
         # Initialize Firebase Admin SDK
-        firebase_admin.initialize_app(cred)
+        app = firebase_admin.initialize_app(cred)
         print("Firebase Admin SDK initialized successfully")
-        return True
+        return app
     except Exception as e:
         print(f"Error initializing Firebase: {e}")
         import traceback
         print("Full traceback:", traceback.format_exc())
-        return False
+        return None
 
 # Initialize Firebase first
-if not initialize_firebase():
-    print("Failed to initialize Firebase")
+app = initialize_firebase()
+if not app:
     raise Exception("Failed to initialize Firebase")
 
 # Initialize Firestore client AFTER Firebase Admin initialization
+print("Initializing Firestore client...")
 db = firestore.client()
 print("Firestore client initialized successfully")
 
