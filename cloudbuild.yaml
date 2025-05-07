@@ -1,23 +1,23 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '--platform=linux/amd64', '-t', 'gcr.io/$PROJECT_ID/meow-god-backend', '.']
+    args: ['build', '--platform=linux/amd64', '-t', 'gcr.io/meow-god/meow-god-backend', '.']
 
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/meow-god-backend']
+    args: ['push', 'gcr.io/meow-god/meow-god-backend']
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args:
       [
         'run', 'deploy', 'meow-god-backend',
-        '--image', 'gcr.io/$PROJECT_ID/meow-god-backend',
+        '--image', 'gcr.io/meow-god/meow-god-backend',
         '--platform', 'managed',
         '--region', 'us-central1',
         '--allow-unauthenticated'
       ]
 
 images:
-  - 'gcr.io/$PROJECT_ID/meow-god-backend'
+  - 'gcr.io/meow-god/meow-god-backend'
 
 options:
   logging: CLOUD_LOGGING_ONLY 
