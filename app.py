@@ -31,60 +31,24 @@ CORS(app, resources={
 def initialize_firebase():
     try:
         print("Starting Firebase initialization...")
-        print("Environment variables available:")
-        for key in ['FIREBASE_PRIVATE_KEY_ID', 'FIREBASE_CLIENT_EMAIL', 'FIREBASE_CLIENT_ID', 'FIREBASE_CLIENT_CERT_URL']:
-            value = os.getenv(key)
-            print(f"{key}: {'Set' if value else 'Not set'}")
-        print("FIREBASE_PRIVATE_KEY: " + ('Set' if os.getenv('FIREBASE_PRIVATE_KEY') else 'Not set'))
-        
-        # For local development
-        if os.path.exists("serviceAccountKey.json"):
+        if os.getenv("USE_LOCAL", "false").lower() == "true":
             print("Using local serviceAccountKey.json")
             cred = credentials.Certificate("serviceAccountKey.json")
-        # For Cloud Run
+            firebase_admin.initialize_app(cred)
         else:
-            print("Using environment variables for Firebase credentials")
-            # Get credentials from environment variables
-            private_key = os.getenv('FIREBASE_PRIVATE_KEY')
-            if not private_key:
-                raise ValueError("FIREBASE_PRIVATE_KEY environment variable is not set")
-            
-            print("Private key found, formatting...")
-            # Handle the private key format
-            private_key = private_key.replace('\\n', '\n')
-            if not private_key.startswith('-----BEGIN PRIVATE KEY-----'):
-                private_key = '-----BEGIN PRIVATE KEY-----\n' + private_key
-            if not private_key.endswith('-----END PRIVATE KEY-----'):
-                private_key = private_key + '\n-----END PRIVATE KEY-----'
-            
-            print("Creating credentials object...")
-            cred = credentials.Certificate({
-                "type": "service_account",
-                "project_id": "meow-god",
-                "private_key_id": os.getenv('FIREBASE_PRIVATE_KEY_ID'),
-                "private_key": private_key,
-                "client_email": os.getenv('FIREBASE_CLIENT_EMAIL'),
-                "client_id": os.getenv('FIREBASE_CLIENT_ID'),
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                "client_x509_cert_url": os.getenv('FIREBASE_CLIENT_CERT_URL')
-            })
+            print("Using GCP default credentials")
+            firebase_admin.initialize_app()
         
-        print("Initializing Firebase Admin SDK...")
-        # Initialize Firebase Admin SDK
-        app = firebase_admin.initialize_app(cred)
         print("Firebase Admin SDK initialized successfully")
-        return app
+        return True
     except Exception as e:
         print(f"Error initializing Firebase: {e}")
         import traceback
         print("Full traceback:", traceback.format_exc())
-        return None
+        return False
 
 # Initialize Firebase first
-app = initialize_firebase()
-if not app:
+if not initialize_firebase():
     raise Exception("Failed to initialize Firebase")
 
 # Initialize Firestore client AFTER Firebase Admin initialization
@@ -484,23 +448,48 @@ def get_altar_items():
         if not decoded_token:
             return jsonify({'error': 'Invalid token'}), 401
         
+        uid = decoded_token['uid']
         session = Session()
-        items = session.query(Item).filter_by(user_uid=decoded_token['uid']).all()
         
-        items_list = [{
-            'id': item.item_id,
-            'uniqueId': str(item.id),
-            'category': item.category,
-            'position': {
-                'left': item.x,
-                'top': item.y
-            }
-        } for item in items]
+        # Get items from SQLite
+        sqlite_items = session.query(Item).filter_by(user_uid=uid).all()
+        
+        # Get items from Firestore
+        firestore_items = db.collection('users').document(uid).collection('altar_items').stream()
+        firestore_items_dict = {doc.id: doc.to_dict() for doc in firestore_items}
+        
+        # Process items from SQLite
+        items_list = []
+        for item in sqlite_items:
+            items_list.append({
+                'id': item.item_id,
+                'uniqueId': str(item.id),
+                'category': item.category,
+                'position': {
+                    'left': item.x,
+                    'top': item.y
+                }
+            })
+            
+            # If item doesn't exist in Firestore, add it
+            if str(item.id) not in firestore_items_dict:
+                firestore_data = {
+                    'item_id': item.item_id,
+                    'category': item.category,
+                    'position': {
+                        'left': item.x,
+                        'top': item.y
+                    },
+                    'created_at': firestore.SERVER_TIMESTAMP
+                }
+                db.collection('users').document(uid).collection('altar_items').document(str(item.id)).set(firestore_data)
         
         session.close()
         return jsonify({'items': items_list})
     except Exception as e:
-        print("Error in get_altar_items:", str(e))  # Debug log
+        print("Error in get_altar_items:", str(e))
+        import traceback
+        print("Full traceback:", traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/altar/items', methods=['POST'])
@@ -635,11 +624,3 @@ def delete_altar_item(unique_id):
     session.close()
     
     return jsonify({'message': 'Item deleted successfully'})
-
-    
-if __name__ == '__main__':
-    # For local development
-    app.run(debug=True)
-else:
-    # For GCP deployment
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
