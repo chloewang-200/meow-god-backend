@@ -1,8 +1,6 @@
-Flask==2.2.5
-firebase-admin==6.5.0
-google-cloud-firestore==2.14.0
-google-auth==2.27.0
-flask-cors==4.0.0
+Flask==2.3.3
+Flask-Cors==4.0.0
+firebase-admin==6.2.0
+SQLAlchemy==2.0.20
+python-dotenv==1.0.0
 gunicorn==21.2.0
-python-dotenv
-sqlalchemy==2.0.30
