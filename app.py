@@ -11,6 +11,7 @@ from sqlalchemy import DateTime
 from datetime import datetime
 from firebase_admin import firestore
 import json
+import uuid
 
 
 # Load environment variables
@@ -18,6 +19,7 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
+
 CORS(app, resources={
     r"/*": {
         "origins": "*",  # In production, replace with your frontend domain
@@ -439,161 +441,53 @@ def get_candle_start_time():
 # endpoints for altar items
 @app.route('/altar/items', methods=['GET'])
 def get_altar_items():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'No token provided'}), 401
+    decoded_token = verify_token(token)
+    if not decoded_token:
+        return jsonify({'error': 'Invalid token'}), 401
+    uid = decoded_token['uid']
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return jsonify({'error': 'No token provided'}), 401
-        
-        decoded_token = verify_token(token)
-        if not decoded_token:
-            return jsonify({'error': 'Invalid token'}), 401
-        
-        uid = decoded_token['uid']
-        session = Session()
-        
-        # Get items from SQLite
-        sqlite_items = session.query(Item).filter_by(user_uid=uid).all()
-        
-        # Get items from Firestore
-        firestore_items = db.collection('users').document(uid).collection('altar_items').stream()
-        firestore_items_dict = {doc.id: doc.to_dict() for doc in firestore_items}
-        
-        # Process items from SQLite
-        items_list = []
-        for item in sqlite_items:
-            items_list.append({
-                'id': item.item_id,
-                'uniqueId': str(item.id),
-                'category': item.category,
-                'position': {
-                    'left': item.x,
-                    'top': item.y
-                }
-            })
-            
-            # If item doesn't exist in Firestore, add it
-            if str(item.id) not in firestore_items_dict:
-                firestore_data = {
-                    'item_id': item.item_id,
-                    'category': item.category,
-                    'position': {
-                        'left': item.x,
-                        'top': item.y
-                    },
-                    'created_at': firestore.SERVER_TIMESTAMP
-                }
-                db.collection('users').document(uid).collection('altar_items').document(str(item.id)).set(firestore_data)
-        
-        session.close()
-        return jsonify({'items': items_list})
+        user_doc = db.collection('users').document(uid).get()
+        items = user_doc.get('items') if user_doc.exists and 'items' in user_doc.to_dict() else []
+        return jsonify({'items': items})
     except Exception as e:
-        print("Error in get_altar_items:", str(e))
-        import traceback
-        print("Full traceback:", traceback.format_exc())
+        print('Error reading items from Firestore:', e)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/altar/items', methods=['POST'])
 def save_altar_item():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'No token provided'}), 401
+    decoded_token = verify_token(token)
+    if not decoded_token:
+        return jsonify({'error': 'Invalid token'}), 401
+    uid = decoded_token['uid']
+    data = request.json
+    item_id = data.get('id')
+    category = data.get('category')
+    position = data.get('position')
+    if not all([item_id, category, position, 'left' in position, 'top' in position]):
+        return jsonify({'error': 'Missing required fields'}), 400
     try:
-        print("=== Starting save_altar_item ===")
-        token = request.headers.get('Authorization')
-        print("Authorization header:", token)
-        
-        if not token:
-            return jsonify({'error': 'No token provided'}), 401
-        
-        decoded_token = verify_token(token)
-        print("Decoded token:", decoded_token)
-        
-        if not decoded_token:
-            return jsonify({'error': 'Invalid token'}), 401
-        
-        data = request.json
-        print("Received data:", data)
-        
-        item_id = data.get('id')
-        category = data.get('category')
-        position = data.get('position')
-        
-        print("Parsed fields:", {
-            'item_id': item_id,
+        user_ref = db.collection('users').document(uid)
+        user_doc = user_ref.get()
+        items = user_doc.get('items') if user_doc.exists and 'items' in user_doc.to_dict() else []
+        # Generate a uniqueId for the item
+        unique_id = str(uuid.uuid4())
+        new_item = {
+            'id': item_id,
+            'uniqueId': unique_id,
             'category': category,
             'position': position
-        })
-        
-        if not all([item_id, category, position, 'left' in position, 'top' in position]):
-            print("Missing fields:", {
-                'item_id': item_id,
-                'category': category,
-                'position': position
-            })
-            return jsonify({'error': 'Missing required fields'}), 400
-        
-        try:
-            session = Session()
-            print("Creating new item with data:", {
-                'user_uid': decoded_token['uid'],
-                'item_id': item_id,
-                'category': category,
-                'x': position['left'],
-                'y': position['top']
-            })
-            
-            new_item = Item(
-                user_uid=decoded_token['uid'],
-                item_id=item_id,
-                category=category,
-                x=position['left'],
-                y=position['top']
-            )
-            session.add(new_item)
-            session.commit()
-            print("Item saved to SQLite successfully")
-            
-            # Also save to Firestore
-            try:
-                firestore_data = {
-                    'item_id': item_id,
-                    'category': category,
-                    'position': {
-                        'left': position['left'],
-                        'top': position['top']
-                    },
-                    'created_at': firestore.SERVER_TIMESTAMP
-                }
-                print("Saving to Firestore:", firestore_data)
-                
-                db.collection('users').document(decoded_token['uid']).collection('altar_items').document(str(new_item.id)).set(firestore_data)
-                print("Item saved to Firestore successfully")
-            except Exception as e:
-                print("Firestore error:", str(e))
-                # Continue even if Firestore fails
-            
-            item_data = {
-                'id': new_item.item_id,
-                'uniqueId': str(new_item.id),
-                'category': new_item.category,
-                'position': {
-                    'left': new_item.x,
-                    'top': new_item.y
-                }
-            }
-            
-            session.close()
-            print("=== save_altar_item completed successfully ===")
-            return jsonify(item_data)
-            
-        except Exception as e:
-            print("Database error:", str(e))
-            if session:
-                session.rollback()
-                session.close()
-            raise e
-            
+        }
+        items.append(new_item)
+        user_ref.set({'items': items}, merge=True)
+        return jsonify(new_item)
     except Exception as e:
-        print("Error in save_altar_item:", str(e))
-        import traceback
-        print("Full traceback:", traceback.format_exc())
+        print('Error saving item to Firestore:', e)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/altar/items/<string:unique_id>', methods=['DELETE'])
@@ -601,26 +495,20 @@ def delete_altar_item(unique_id):
     token = request.headers.get('Authorization')
     if not token:
         return jsonify({'error': 'No token provided'}), 401
-    
     decoded_token = verify_token(token)
     if not decoded_token:
         return jsonify({'error': 'Invalid token'}), 401
-    
-    session = Session()
-    item = session.query(Item).filter_by(
-        id=int(unique_id),
-        user_uid=decoded_token['uid']
-    ).first()
-    
-    if not item:
-        session.close()
-        return jsonify({'error': 'Item not found'}), 404
-    
-    # Delete from Firestore
-    db.collection('users').document(decoded_token['uid']).collection('altar_items').document(unique_id).delete()
-    
-    session.delete(item)
-    session.commit()
-    session.close()
-    
-    return jsonify({'message': 'Item deleted successfully'})
+    uid = decoded_token['uid']
+    try:
+        user_ref = db.collection('users').document(uid)
+        user_doc = user_ref.get()
+        items = user_doc.get('items') if user_doc.exists and 'items' in user_doc.to_dict() else []
+        new_items = [item for item in items if item.get('uniqueId') != unique_id]
+        user_ref.set({'items': new_items}, merge=True)
+        return jsonify({'message': 'Item deleted successfully'})
+    except Exception as e:
+        print('Error deleting item from Firestore:', e)
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
